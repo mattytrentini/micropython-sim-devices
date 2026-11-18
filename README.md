@@ -1,6 +1,6 @@
 # micropython-sim-devices
 
-Version 0.1.0. MIT-licensed, board-independent digital device models for stock
+Version 0.2.0. MIT-licensed, board-independent digital device models for stock
 MicroPython Unix and pure Python. No pinouts, board register maps, hardware access,
 image dependencies or replacements for native `framebuf`/fonts/time/GC.
 Simulated results do not validate electrical behavior or physical hardware.
@@ -12,12 +12,12 @@ license. Install from the published repository using:
 
 ```python
 import mip
-mip.install("github:mattytrentini/micropython-sim-devices", version="v0.1.0")
+mip.install("github:mattytrentini/micropython-sim-devices", version="v0.2.0")
 ```
 
 Manual installation: copy `sim_devices/` to your library path and retain `LICENSE`.
 The models themselves have no dependencies. For real-driver simulation, use
-`micropython-mock-machine` 1.2.0, native MicroPython `framebuf`, and the actual
+`micropython-mock-machine` 1.3.0, native MicroPython `framebuf`, and the actual
 consumer drivers; the models neither bundle nor replace those drivers.
 
 ## Modbus RTU
@@ -107,6 +107,66 @@ leave earlier bytes applied to controller state, but no partial frame is
 published. Command arguments remain bounded, including after invalid commands.
 No SPI, reset pin, optics, physical orientation, timing or analog emulation.
 
+## GPIO expanders and RTC
+
+These independent I2C models attach through `bus.add_device(device)`. Board
+wiring and active-low channel interpretations belong to the application, not
+the library. All accept explicit addresses; there are no KinCony pin constants.
+
+| Model | Implemented digital behavior | Explicit limits |
+| --- | --- | --- |
+| `sim_devices.pcf8575.PCF8575I2C` | Power-on latch `0xffff`; sampled port = latch AND externally injected levels; little-endian two-byte reads/writes | Exactly two-byte transfers; no register-memory protocol, interrupts or electrical timing |
+| `sim_devices.xl9535.XL9535I2C` | Input/output/polarity/direction registers 0–7, paired pointer sequencing; injected input samples and real output-latch behavior | No interrupt or analog model |
+| `sim_devices.ds3231.DS3231I2C` | BCD time, native monotonic ticking, leap dates/day rollover, 12/24-hour fields, control/status preservation and OSF | Years 2000–2099; no alarm, temperature, aging, battery or oscillator physics |
+
+`PCF8575I2C.inject(raw_u16)` models externally held-low/released-high samples.
+`XL9535I2C.inject(raw_u16)` supplies physical input levels; `.config` and
+`.polarity` are explicit environmental register settings. App reads never
+repair or reapply them. Relay control-pin samples are not relay-contact feedback.
+
+The RTC constructor accepts
+`datetime=(year, month, day, hour, minute, second, weekday)` (Monday=1),
+`osf=True`, and optional `clock_ms` for deterministic monotonic-clock tests.
+`set_datetime()` initializes environmental time without clearing OSF;
+`set_osf(bool)` explicitly changes that flag. The actual driver's writes
+still travel through the I2C register protocol. Reads never clear OSF or
+set the clock; timestamps are timezone-naive, not browser/host wall time.
+
+All three expose `.online`: false makes transport operations raise `EIO`,
+not return fake zero readings. Restoring it preserves controller state.
+Snapshots remain available offline and include bounded saturating `reads`
+and `writes` counters. Address-pointer selection is not counted as a data write.
+Unsupported operations fail explicitly rather than pretending full chip support.
+
+## ST7789 SPI LCD
+
+`sim_devices.st7789.ST7789SPI(spi, cs, dc, reset=None, backlight=None, ...)`
+attaches through generic `SPI.add_device()`. Synchronous Pin observers capture
+reset/backlight changes separately from scheduled IRQ delivery. No driver, font,
+SPI object or Pin is replaced by a high-level fake display.
+
+Configure logical `width`/`height`, `panel_color_order` (`RGB` or `BGR`), and
+`native_inversion`. The last two describe panel requirements: matching MADCTL
+color order and inversion yield the written RGB565 colors; mismatches swap
+red/blue or invert bits. The fixed `ram` and visible `buffer` contain logical,
+little-endian RGB565 pixels, suitable for an existing framebuffer publisher.
+MADCTL axes are metadata, not a physical mount/rotation photograph.
+
+The model parses real command/data SPI traffic, including fragmented parameters
+and odd-byte pixel chunks, address windows/cursor wrapping, reset, sleep/display
+power and backlight, and the unchanged driver's initialization/configuration.
+Reset preserves GRAM but blanks the view and resets controller state.
+Electrical/gamma settings are metadata; scrolling and non-RGB565 formats fail
+explicitly. Unselected bus traffic is ignored. `.online=False` raises `EIO`
+on selected writes without pretending the panel lost power.
+
+**Coalesce publication:** SPI writes only update bounded RAM and mark `dirty`.
+Call `flush()` once per drawing burst or from a bounded async pump; it projects
+one visible frame, invokes optional no-argument `on_frame`, and returns whether
+it published. Never snapshot a 153,600-byte frame for every tiny font/SPI write.
+Bind `on_frame` to an existing publisher; `snapshot()` does not flush/copy pixels.
+The original application's response to a fatal SPI error remains its own policy.
+
 ## Regression tests
 
 The seven protocol/model tests and two real-driver consumer tests passed on the
@@ -131,3 +191,19 @@ micropython-modbus serial driver at `e9ab05a2f1b37796446208a024368725953fc299`
 (GPL-noticed source; not distributed by this MIT package). Native tests exercise
 real driver initialization including AD30, native logo/text pixels, vectored
 show, invert/power/contrast and real client rejection/recovery for timeout/CRC.
+
+The CO16 additions passed another 25 native model/real-driver tests:
+
+```sh
+micropython tests/test_co16_i2c.py
+micropython tests/test_co16_i2c_consumers.py
+micropython tests/test_st7789.py
+micropython tests/test_st7789_consumer.py
+```
+
+Supply unchanged PCF8575, XL9535, DS3231, `st7789py`, `co16_tft_config` and
+`vga1_8x16` modules plus HAL 1.3.0 and `unittest` on `MICROPYPATH`.
+The consumer drivers/font are MIT-licensed external dependencies, not bundled
+copies. Tests exercise actual register/SPI traffic, all 16 channels, readonly
+startup, faults/recovery, ticking leap midnight, ROM-font pixels and color/power
+effects. CPython commands are provided where applicable, not claimed run.

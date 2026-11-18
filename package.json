@@ -3,9 +3,13 @@
     ["sim_devices/__init__.py", "sim_devices/__init__.py"],
     ["sim_devices/modbus.py", "sim_devices/modbus.py"],
     ["sim_devices/ssd1306.py", "sim_devices/ssd1306.py"],
+    ["sim_devices/pcf8575.py", "sim_devices/pcf8575.py"],
+    ["sim_devices/xl9535.py", "sim_devices/xl9535.py"],
+    ["sim_devices/ds3231.py", "sim_devices/ds3231.py"],
+    ["sim_devices/st7789.py", "sim_devices/st7789.py"],
     ["licenses/micropython-sim-devices.txt", "LICENSE"]
   ],
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
-  "description": "Board-independent bounded Modbus RTU and SSD1306 digital models"
+  "description": "Board-independent digital I2C, SPI display and Modbus RTU models"
 }
