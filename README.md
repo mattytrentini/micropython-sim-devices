@@ -1,0 +1,133 @@
+# micropython-sim-devices
+
+Version 0.1.0. MIT-licensed, board-independent digital device models for stock
+MicroPython Unix and pure Python. No pinouts, board register maps, hardware access,
+image dependencies or replacements for native `framebuf`/fonts/time/GC.
+Simulated results do not validate electrical behavior or physical hardware.
+
+## Installation
+
+The root `package.json` is a mip manifest with relative source URLs and the MIT
+license. Install from the published repository using:
+
+```python
+import mip
+mip.install("github:mattytrentini/micropython-sim-devices", version="v0.1.0")
+```
+
+Manual installation: copy `sim_devices/` to your library path and retain `LICENSE`.
+The models themselves have no dependencies. For real-driver simulation, use
+`micropython-mock-machine` 1.2.0, native MicroPython `framebuf`, and the actual
+consumer drivers; the models neither bundle nor replace those drivers.
+
+## Modbus RTU
+
+```python
+from sim_devices.modbus import ModbusRTUSlave
+
+registers = [0x1234, 0xabcd]
+
+def read_holding(start, count):
+    if start + count > len(registers):
+        raise IndexError(start)
+    return registers[start:start + count]
+
+slave = ModbusRTUSlave(1, read_holding)
+uart.set_responder(slave.respond)
+```
+
+`respond(frame)` accepts exactly one complete RTU ADU and returns response bytes
+or `None`. Supported: unit IDs 1..247, FC03, 1..125 uint16 registers, 16-bit
+address space, CRC-16/Modbus. CRC is independently implemented from the protocol;
+no external client implementation is included. Wrong-unit/broadcast reads,
+invalid request CRCs and frames outside 4..256 bytes receive no response.
+A valid addressed unsupported function gets exception 1; a callback `IndexError`
+or address-range overflow gets exception 2; malformed FC03 length/quantity gets
+exception 3. Callback length/type errors raise locally rather than inventing
+registers or hiding programming errors.
+
+Optional `fault(start, count)` returns exactly `normal`, `timeout` or `crc`.
+Timeout returns no bytes. CRC faults flip a response CRC bit, leaving data intact,
+so the actual client must reject the actual response. Unknown fault names raise.
+Snapshots contain only counters and one bounded request metadata record; there
+is no growing transaction log. `crc_errors` counts rejected request CRCs plus
+injected response CRC faults; `responses` includes protocol exceptions and corrupt
+responses, but excludes timeouts. `requests` counts every `respond` invocation.
+
+Not modeled: fragmentation, RTU silent intervals, serial electrical timing,
+multiple devices arbitrating a wire, writes, other functions, register semantics,
+calibration or any particular meter.
+
+## SSD1306 I2C
+
+```python
+from sim_devices.ssd1306 import SSD1306I2C
+from ssd1306 import SSD1306_I2C
+
+model = SSD1306I2C(i2c, width=128, height=64)
+driver = SSD1306_I2C(128, 64, i2c)  # unchanged official driver
+model.on_frame = publish  # no arguments; read model.buffer here
+```
+
+The bus must offer `add_device(device)` and dispatch normal `writeto` operations
+by `device.addr`. The real driver's `writevto` needs HAL 1.2.0: it must concatenate
+segments into **one transaction**, not issue separate control/data writes.
+Widths 1..128 and heights 16..64 divisible by 8 are accepted. Narrow panels use
+the official driver's centered controller columns. `ram` holds fixed 128x64
+controller memory; `buffer` is a stable, in-place MONO_VLSB bytearray of visible
+logical pixels. Never replace or resize either buffer.
+
+Supported: Co/D-C control-byte chains; parameter accumulation across transactions;
+horizontal, vertical and page addressing; column/page windows and wrap; start
+line and display offset; power, inversion, entire-on and contrast; segment/COM
+orientation metadata; matching multiplex; clock/precharge/VCOM/COM-pin/charge-pump
+configuration metadata; IREF selection including the official driver's AD30;
+and documented NOP. The real official driver performs all drawing, text and logo
+operations using native `framebuf`, then supplies its raw display bytes.
+
+Output is **driver-logical**, not a physical panel photograph: segment remap and
+COM scan direction are tracked but do not flip the published logical image.
+Start line/display offset shift RAM rows. Power-off blanks output without losing
+RAM; power-on restores it. Inversion and entire-on affect visible bytes. Contrast
+and electrical settings are metadata, not analog brightness or scan simulation.
+Multiplex values that disagree with configured geometry fail explicitly.
+
+`on_frame()` runs only after a complete I2C transaction, never per byte or command
+argument. Data transactions publish once, including repeated unchanged frames;
+command transactions publish only if visible bytes change. `frames` counts these
+publications even without a callback. Snapshots include geometry, publication
+count, power/contrast/inversion/orientation and sum-of-visible-bytes `checksum`.
+No RGB conversion, encoded images, retained frame history or external canvas
+library is used. Consumers can bind their own publisher after construction.
+
+Unsupported commands (including scrolling), reads and register-memory APIs raise
+`NotImplementedError`. Invalid control bytes, windows or parameters raise
+`ValueError`. I2C writes are not database transactions: an invalid later byte can
+leave earlier bytes applied to controller state, but no partial frame is
+published. Command arguments remain bounded, including after invalid commands.
+No SPI, reset pin, optics, physical orientation, timing or analog emulation.
+
+## Regression tests
+
+The seven protocol/model tests and two real-driver consumer tests passed on the
+stock published MicroPython Unix v1.29.0 image. No custom firmware or hardware
+was used. The CPython command below is also provided, but was not run here.
+
+```sh
+PYTHONPATH=. python -m unittest discover -s tests -p test_models.py
+```
+
+For native MicroPython, supply this repository and `unittest` on `MICROPYPATH`,
+then run `micropython tests/test_models.py`. Native consumer regression also
+requires HAL 1.2.0 plus unchanged `ssd1306.py` and `umodbus/` on that path:
+
+```sh
+micropython tests/test_native_consumers.py
+```
+
+Consumer references: official micropython-lib SSD1306 at
+`92ee97d94c4b558cf4e6d27a4534401f1e9b9f50` (MIT), and external
+micropython-modbus serial driver at `e9ab05a2f1b37796446208a024368725953fc299`
+(GPL-noticed source; not distributed by this MIT package). Native tests exercise
+real driver initialization including AD30, native logo/text pixels, vectored
+show, invert/power/contrast and real client rejection/recovery for timeout/CRC.

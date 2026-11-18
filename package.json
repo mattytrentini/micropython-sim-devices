@@ -1,0 +1,11 @@
+{
+  "urls": [
+    ["sim_devices/__init__.py", "sim_devices/__init__.py"],
+    ["sim_devices/modbus.py", "sim_devices/modbus.py"],
+    ["sim_devices/ssd1306.py", "sim_devices/ssd1306.py"],
+    ["licenses/micropython-sim-devices.txt", "LICENSE"]
+  ],
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Board-independent bounded Modbus RTU and SSD1306 digital models"
+}
